@@ -171,10 +171,17 @@ client_readbody(struct bufferevent *bufev, void *arg)
 
         logmsg(LOG_DEBUG, "#%d removed null from buffer", s->id);            
 
-        bufev->readcb = client_read;
+        s->clt_toread = 0;
     }
 
     // TODO: read the body and put it somewhere
+
+    if (s->clt_toread == 0) {
+        s->clt_toread = TOREAD_STOMP_HEADER;
+        bufferevent_disable(bufev, EV_READ);
+        bufev->readcb = client_read;
+        return;
+    }
 
     if (bufev->readcb != client_readbody)
         bufev->readcb(bufev, arg);
@@ -349,9 +356,8 @@ client_read(struct bufferevent *bufev, void *arg)
         }
         
         bufev->readcb = client_readbody;
+        bufferevent_disable(bufev, EV_READ);
 
-        if (s->clt_toread != 0)
-            bufferevent_disable(bufev, EV_READ);
         client_respond(s);
     } 
 
@@ -362,6 +368,7 @@ client_read(struct bufferevent *bufev, void *arg)
     if (s->clt_done) {
         end_session(s);
     }
+
     return;
 
 bad:
@@ -452,7 +459,6 @@ init_session(void)
     s->id = id_count++;
     s->clt_fd = -1;
     s->clt_headersdone = 0;
-    s->clt_toread = TOREAD_STOMP_HEADER;
     s->clt_line = 0;
     s->clt_done = 0;
     TAILQ_INIT(&desc->stomp_headers);
@@ -473,10 +479,7 @@ reset_session_state(struct session *s)
     logmsg(LOG_INFO, "#%d reset session", s->id);
 
     s->clt_headersdone = 0;
-    // TODO: this line will cause the server to not consume any more frames
-    // s->clt_toread = TOREAD_STOMP_HEADER;
     s->clt_line = 0;
-
     desc->stomp_cmd = 0;
     while ((hdr = TAILQ_FIRST(&desc->stomp_headers))) {
         TAILQ_REMOVE(&desc->stomp_headers, hdr, next);
