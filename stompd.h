@@ -26,7 +26,6 @@ struct session {
     struct bufferevent *clt_bufev;
     int clt_fd;
     int clt_headersdone;
-    int clt_bodydone;
     int clt_line;
     int clt_done;
     off_t clt_toread;
