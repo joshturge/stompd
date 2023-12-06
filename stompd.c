@@ -385,7 +385,6 @@ client_respond(struct session *s)
 
     switch (desc->stomp_cmd) {
     case STOMP_CMD_CONNECT: {
-        // quick and dirty. no checks
         key.key = "accept-version";
         if ((hdr = kv_get(&desc->stomp_headers, &key)) == NULL) {
             logmsg(LOG_DEBUG, "#%d accept-version not defined", s->id);            
@@ -520,7 +519,7 @@ end_session(struct session *s)
     if (s->clt_bufev)
         bufferevent_free(s->clt_bufev);
 
-		kv_purge(&desc->stomp_headers);
+    kv_purge(&desc->stomp_headers);
     LIST_REMOVE(s, entry);
     free(s);
     session_count--;
@@ -626,7 +625,7 @@ main(int argc, char *argv[])
 struct kv *
 kv_get(struct kvlist *list, struct kv *kvtarg)
 {
-		struct kv *kv = NULL;
+    struct kv *kv = NULL;
 
     TAILQ_FOREACH(kv, list, next) {
         if (strcmp(kvtarg->key, kv->key) == 0)
