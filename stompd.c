@@ -178,9 +178,7 @@ client_readbody(struct bufferevent *bufev, void *arg)
 
     if (s->clt_toread == 0) {
         s->clt_toread = TOREAD_STOMP_HEADER;
-        bufferevent_disable(bufev, EV_READ);
         bufev->readcb = client_read;
-        return;
     }
 
     if (bufev->readcb != client_readbody)
@@ -356,18 +354,17 @@ client_read(struct bufferevent *bufev, void *arg)
         }
         
         bufev->readcb = client_readbody;
-        bufferevent_disable(bufev, EV_READ);
 
         client_respond(s);
+        return;
     } 
-
-    if (EVBUFFER_LENGTH(src) && bufev->readcb != client_read)
-        bufev->readcb(bufev, arg);
-    bufferevent_enable(bufev, EV_READ);
 
     if (s->clt_done) {
         end_session(s);
     }
+
+    if (EVBUFFER_LENGTH(src) && bufev->readcb != client_read)
+        bufev->readcb(bufev, arg);
 
     return;
 
@@ -383,15 +380,32 @@ client_respond(struct session *s)
 {
     struct stomp_descriptor *desc = s->clt_descreq;
     char wbuf[256];
-    struct kv *hdr;
-    char *recval = NULL;
+    struct kv key, *hdr;
     size_t wbuflen;
 
     switch (desc->stomp_cmd) {
     case STOMP_CMD_CONNECT: {
         // quick and dirty. no checks
+        key.key = "accept-version";
+        if ((hdr = kv_get(&desc->stomp_headers, &key)) == NULL) {
+            logmsg(LOG_DEBUG, "#%d accept-version not defined", s->id);            
+            goto fail;
+        } else {
+            if (strcmp(PROTOCOL_VERSION, hdr->value) != 0) {
+                logmsg(LOG_DEBUG, "#%d protocol version mismatch, wanted %s got %s",
+                    s->id, PROTOCOL_VERSION, hdr->value);            
+                goto fail;
+            }
+        }
+
+        key.key = "host";
+        if ((hdr = kv_get(&desc->stomp_headers, &key)) == NULL) {
+            logmsg(LOG_DEBUG, "#%d host not defined", s->id);            
+            goto fail;
+        } 
+
         snprintf(wbuf, sizeof(wbuf),
-        "CONNECTED\nversion:1.2\n\n");
+            "CONNECTED\nversion:1.2\n\n");
         wbuflen = strlen(wbuf);
         bufferevent_write(s->clt_bufev, wbuf, wbuflen + 1);            
         wbuflen = 0;
@@ -408,18 +422,15 @@ client_respond(struct session *s)
     case STOMP_CMD_ABORT:
     case STOMP_CMD_DISCONNECT: {
         // start: quick and dirty. no checks
-        // get the reciept header
-        TAILQ_FOREACH(hdr, &desc->stomp_headers, next) {
-            if (strcmp("receipt", hdr->key) == 0)
-                recval = hdr->value;
-        }
-        if (recval != NULL) {
-            // write receipt            
+
+        key.key = "receipt";
+        if ((hdr = kv_get(&desc->stomp_headers, &key)) != NULL &&
+            hdr->value != NULL ) {
             snprintf(wbuf, sizeof(wbuf),
-            "RECEIPT\nreceipt-id:%s\n\n", recval);
+                "RECEIPT\nreceipt-id:%s\n\n", hdr->value);
         } else {
             snprintf(wbuf, sizeof(wbuf),
-            "RECEIPT\n\n");
+                "RECEIPT\n\n");
         }
         wbuflen = strlen(wbuf);
         bufferevent_write(s->clt_bufev, wbuf, wbuflen + 1);            
@@ -439,6 +450,10 @@ client_respond(struct session *s)
         return;
     }
 
+    return;
+
+fail:
+    end_session(s);
     return;
 }
 
@@ -473,7 +488,6 @@ init_session(void)
 void
 reset_session_state(struct session *s)
 {
-    struct kv *hdr;
     struct stomp_descriptor *desc = s->clt_descreq;
 
     logmsg(LOG_INFO, "#%d reset session", s->id);
@@ -481,10 +495,7 @@ reset_session_state(struct session *s)
     s->clt_headersdone = 0;
     s->clt_line = 0;
     desc->stomp_cmd = 0;
-    while ((hdr = TAILQ_FIRST(&desc->stomp_headers))) {
-        TAILQ_REMOVE(&desc->stomp_headers, hdr, next);
-        free(hdr);
-    }
+    kv_purge(&desc->stomp_headers);
 
     return;
 }
@@ -492,7 +503,6 @@ reset_session_state(struct session *s)
 void
 end_session(struct session *s)
 {
-    struct kv *hdr;
     struct stomp_descriptor *desc = s->clt_descreq;
 
     logmsg(LOG_INFO, "#%d ending session", s->id);
@@ -501,16 +511,16 @@ end_session(struct session *s)
     if (s->clt_bufev && s->clt_fd != -1)
         evbuffer_write(s->clt_bufev->output, s->clt_fd);
 
+    if (s->clt_bufev != NULL)
+        bufferevent_disable(s->clt_bufev, EV_READ|EV_WRITE);
+
     if (s->clt_fd != -1)
         close(s->clt_fd);
 
     if (s->clt_bufev)
         bufferevent_free(s->clt_bufev);
 
-    while ((hdr = TAILQ_FIRST(&desc->stomp_headers))) {
-        TAILQ_REMOVE(&desc->stomp_headers, hdr, next);
-        free(hdr);
-    }
+		kv_purge(&desc->stomp_headers);
     LIST_REMOVE(s, entry);
     free(s);
     session_count--;
@@ -553,7 +563,7 @@ main(int argc, char *argv[])
     int error, listenfd, on;
 
     listen_ip = "127.0.0.1";
-    listen_port = "8080";
+    listen_port = "61613";
     loglevel = LOG_DEBUG; 
     max_sessions = 10;
     timeout = 24 * 3600;
@@ -611,6 +621,40 @@ main(int argc, char *argv[])
 
     /* NOTREACHED */
     return (1);
+}
+
+struct kv *
+kv_get(struct kvlist *list, struct kv *kvtarg)
+{
+		struct kv *kv = NULL;
+
+    TAILQ_FOREACH(kv, list, next) {
+        if (strcmp(kvtarg->key, kv->key) == 0)
+				    break;
+    }
+
+    return (kv);
+}
+
+void
+kv_purge(struct kvlist *list)
+{
+    struct kv *kv;
+    while ((kv = TAILQ_FIRST(list)) != NULL) {
+        TAILQ_REMOVE(list, kv, next);
+        kv_free(kv);
+        free(kv);
+    }
+}
+
+void
+kv_free(struct kv *kv)
+{
+    free(kv->key);
+    kv->key = NULL;
+    free(kv->value);
+    kv->value = NULL;
+    memset(kv, 0, sizeof(*kv));
 }
 
 const char *

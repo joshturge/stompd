@@ -4,6 +4,7 @@
 #define TCP_BACKLOG 10
 #define MAX_LOGLINE 300
 #define SERVER_MAXHEADERLENGTH 100
+#define PROTOCOL_VERSION "1.2"
 
 enum stompchunk {
     TOREAD_UNLIMITED        = -1,
@@ -49,5 +50,9 @@ void client_read(struct bufferevent *, void *);
 void client_readbody(struct bufferevent *, void *);
 void client_respond(struct session *);
 enum stompcmd stompcmd_byname(const char *);
+
+struct kv *kv_get(struct kvlist *, struct kv *);
+void kv_purge(struct kvlist *);
+void kv_free(struct kv *);
 
 #endif /* STOMPD_H */

@@ -27,6 +27,7 @@ struct stomp_cmd {
 };
 #define STOMP_CMDS { \
     { STOMP_CMD_CONNECT,         "CONNECT" }, \
+    { STOMP_CMD_CONNECT,         "STOMP" }, \
     { STOMP_CMD_CONNECTED,     "CONNECTED" }, \
     { STOMP_CMD_SEND,                 "SEND" }, \
     { STOMP_CMD_SUBSCRIBE,     "SUBSCRIBE" }, \
